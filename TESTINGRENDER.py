@@ -78,8 +78,10 @@ def configure_printer(printer_ip):
     except Exception as e:
         return {"error": str(e)}
 
+@app.route('/')
+def home():
+    return "Flask app is running!"
 
-@app.route('/configure', methods=['POST'])
 def configure():
     """API endpoint to configure a printer."""
     data = request.get_json()
