@@ -66,12 +66,45 @@ class ProxyHandler(BaseHTTPRequestHandler):
             username = form_data.get('username', ['admin'])[0]
             password = form_data.get('password', ['1234'])[0]
 
-            # Define configuration steps
+            # First check what login fields are available
+            try:
+                print("Checking available login fields...")
+                check_request = urllib.request.Request(
+                    f'http://{printer_ip}/settings',
+                    headers={'Content-Type': 'application/x-www-form-urlencoded'}
+                )
+                check_response = urllib.request.urlopen(check_request, timeout=10)
+                check_data = check_response.read().decode()
+                
+                # Check for username/password fields
+                has_username = 'username' in check_data.lower()
+                has_password = 'password' in check_data.lower()
+                
+                # Prepare credentials based on available fields
+                creds = {}
+                if has_username:
+                    creds['0'] = username
+                if has_password:
+                    creds['1'] = password
+                    
+                # If no fields detected, use both
+                if not creds:
+                    creds = {'0': username, '1': password}
+                    
+                print(f"Login fields detected - Username: {has_username}, Password: {has_password}")
+                login_data = urllib.parse.urlencode(creds).encode()
+                
+            except Exception as e:
+                print(f"Error checking login fields: {str(e)}")
+                print("Falling back to default credentials...")
+                login_data = urllib.parse.urlencode({'0': username, '1': password}).encode()
+
+            # Define configuration steps with dynamic login data
             config_steps = [
                 {
                     'name': 'Login',
                     'url': f'http://{printer_ip}/settings',
-                    'data': urllib.parse.urlencode({'0': username, '1': password}).encode()
+                    'data': login_data
                 },
                 {
                     'name': 'Media Setup',

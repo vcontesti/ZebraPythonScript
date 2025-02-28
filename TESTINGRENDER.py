@@ -386,11 +386,36 @@ class ZebraPrinter:
             raise Exception(f"Request failed: {str(e)}")
 
     def login(self):
-        """Authenticate with the printer."""
-        response = self._make_request('/settings', self._credentials)
-        if "Incorrect" in response.text:
-            raise Exception("Login failed: Invalid credentials")
-        return response
+        """Authenticate with the printer by checking available login fields."""
+        # First try to check what fields are available
+        try:
+            response = self._make_request('/settings', {}, method='GET')
+            has_username = 'username' in response.text.lower()
+            has_password = 'password' in response.text.lower()
+            
+            # Prepare credentials based on available fields
+            creds = {}
+            if has_username:
+                creds['0'] = self._credentials['0']  # username
+            if has_password:
+                creds['1'] = self._credentials['1']  # password
+                
+            # If no fields detected, try both
+            if not creds:
+                creds = self._credentials
+                
+            # Attempt login
+            response = self._make_request('/settings', creds)
+            if "Incorrect" in response.text:
+                raise Exception("Login failed: Invalid credentials")
+            return response
+            
+        except Exception as e:
+            # If checking fails, try with both credentials
+            response = self._make_request('/settings', self._credentials)
+            if "Incorrect" in response.text:
+                raise Exception("Login failed: Invalid credentials")
+            return response
 
     def update_media_setup(self):
         """Update media configuration."""
