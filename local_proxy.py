@@ -1,68 +1,98 @@
-from flask import Flask, request, Response
-import requests
-from pyngrok import ngrok
-import logging
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import urllib.request
+import json
+import socket
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+class ProxyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        # Get printer IP from query parameters
+        from urllib.parse import urlparse, parse_qs
+        query = parse_qs(urlparse(self.path).query)
+        printer_ip = query.get('printer_ip', [''])[0]
+        
+        if not printer_ip:
+            self.send_error(400, "Printer IP not specified")
+            return
+            
+        try:
+            # Try to connect to printer port 9100
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            port_result = sock.connect_ex((printer_ip, 9100)) == 0
+            sock.close()
+            
+            # Try HTTP connection
+            try:
+                response = urllib.request.urlopen(f'http://{printer_ip}', timeout=5)
+                http_result = response.getcode() == 200
+            except:
+                http_result = False
+                
+            # Send results back
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            
+            result = {
+                'port_9100': port_result,
+                'http': http_result,
+                'details': [
+                    f'Port 9100: {"Open" if port_result else "Closed"}',
+                    f'HTTP: {"Connected" if http_result else "Failed"}'
+                ]
+            }
+            
+            self.wfile.write(json.dumps(result).encode())
+            
+        except Exception as e:
+            self.send_error(500, str(e))
 
-app = Flask(__name__)
-
-@app.route('/<path:path>', methods=['GET', 'POST'])
-def proxy(path):
-    # Get the target printer IP from headers or query params
-    printer_ip = request.headers.get('X-Printer-IP') or request.args.get('printer_ip')
-    if not printer_ip:
-        return 'Printer IP not specified', 400
-
-    # Construct the target URL
-    target_url = f'http://{printer_ip}/{path}'
-    logger.info(f'Proxying request to: {target_url}')
-
-    try:
-        # Forward the request to the printer
-        resp = requests.request(
-            method=request.method,
-            url=target_url,
-            headers={key: value for (key, value) in request.headers if key != 'Host'},
-            data=request.get_data(),
-            cookies=request.cookies,
-            allow_redirects=False,
-            timeout=10
-        )
-
-        # Return the printer's response
-        excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
-        headers = [(name, value) for (name, value) in resp.raw.headers.items()
-                  if name.lower() not in excluded_headers]
-
-        return Response(resp.content, resp.status_code, headers)
-
-    except requests.RequestException as e:
-        logger.error(f'Error proxying request: {str(e)}')
-        return f'Error connecting to printer: {str(e)}', 502
-
-def start_ngrok():
-    # Start ngrok tunnel
-    public_url = ngrok.connect(5000)
-    logger.info(f'Ngrok tunnel established at: {public_url}')
-    return public_url
+    def do_POST(self):
+        # Get printer IP and data from request
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length).decode()
+        
+        try:
+            # Forward request to printer
+            printer_ip = self.headers.get('X-Printer-IP')
+            if not printer_ip:
+                self.send_error(400, "Printer IP not specified")
+                return
+                
+            request = urllib.request.Request(
+                f'http://{printer_ip}{self.path}',
+                data=post_data.encode(),
+                headers={'Content-Type': 'application/x-www-form-urlencoded'}
+            )
+            
+            response = urllib.request.urlopen(request)
+            
+            # Send response back
+            self.send_response(response.getcode())
+            self.send_header('Content-Type', response.headers.get('Content-Type', 'text/plain'))
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(response.read())
+            
+        except Exception as e:
+            self.send_error(500, str(e))
+            
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-Printer-IP')
+        self.end_headers()
 
 if __name__ == '__main__':
-    # Install pyngrok if not already installed
     try:
-        import pyngrok
-    except ImportError:
-        import subprocess
-        subprocess.check_call(['pip', 'install', 'pyngrok'])
-        from pyngrok import ngrok
-
-    # Start ngrok tunnel
-    public_url = start_ngrok()
-    print(f'\nProxy server is running at: {public_url}')
-    print('Use this URL in your render.com application')
-    print('Press Ctrl+C to stop the server\n')
-    
-    # Run Flask app
-    app.run(port=5000)
+        server = HTTPServer(('localhost', 5001), ProxyHandler)
+        print("\nProxy server is running on http://localhost:5001")
+        print("Use this URL in your render.com application")
+        print("Press Ctrl+C to stop the server\n")
+        server.serve_forever()
+    except Exception as e:
+        print(f"\nError: {str(e)}")
+        print("\nPress Enter to exit...")
+        input()
