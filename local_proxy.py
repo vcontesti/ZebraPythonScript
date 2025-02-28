@@ -92,25 +92,37 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             # Execute configuration steps
             steps_results = []
+            session = urllib.request.build_opener()
+            session.addheaders = [('Content-Type', 'application/x-www-form-urlencoded')]
+
             for step in config_steps:
                 try:
-                    print(f"Trying {step['name']}: {step['url']}")  
+                    print(f"Trying {step['name']}: {step['url']}")
                     request = urllib.request.Request(
                         step['url'],
                         data=step['data'],
                         headers={'Content-Type': 'application/x-www-form-urlencoded'}
                     )
-                    response = urllib.request.urlopen(request, timeout=10)  
+                    response = session.open(request, timeout=10)
                     response_data = response.read().decode()
-                    print(f"Response: {response_data}")  
-                    success = response.getcode() == 200
+                    print(f"Response: {response_data}")
+
+                    # Check for specific error messages in response
+                    if "Incorrect" in response_data:
+                        raise Exception("Invalid credentials")
+                    
+                    success = response.code == 200 and "Error" not in response_data
                     steps_results.append({
                         'step': step['name'],
                         'status': 'success' if success else 'error',
                         'response': response_data
                     })
+
+                    if not success:
+                        raise Exception(f"Step failed: {response_data}")
+
                 except Exception as e:
-                    print(f"Error in {step['name']}: {str(e)}")  
+                    print(f"Error in {step['name']}: {str(e)}")
                     steps_results.append({
                         'step': step['name'],
                         'status': 'error',

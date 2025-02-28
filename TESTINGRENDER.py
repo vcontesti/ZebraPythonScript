@@ -363,125 +363,66 @@ class ZebraPrinter:
         self.proxy_url = proxy_url
         
     @staticmethod
-    def validate_ip_address(ip: str) -> bool:
+    def validate_ip_address(ip: str):
         """Validate IP address format."""
-        pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
-        if not re.match(pattern, ip):
-            raise ValueError("Invalid IP address format")
-        return True
-
-    def _make_request(self, endpoint: str, data: Dict, method: str = 'POST') -> Optional[requests.Response]:
-        """Make HTTP request with error handling."""
         try:
-            url = urljoin(self.base_url, endpoint)
-            
-            # If proxy URL is set, modify the target URL
-            if self.proxy_url:
-                # Replace the local IP with the proxy URL
-                url = url.replace(self.base_url, self.proxy_url)
-            
-            # First check if we can reach the printer
-            try:
-                requests.head(url, timeout=5)
-            except requests.RequestException:
-                app.logger.error(f"Cannot reach printer at {url}")
-                return None
+            ipaddress.ip_address(ip)
+        except ValueError:
+            raise ValueError("Invalid IP address format")
 
-            # If we can reach it, proceed with the actual request
-            response = self.session.request(
-                method=method,
-                url=url,
-                data=data,
-                headers=self.headers,
-                timeout=10
-            )
+    def _make_request(self, endpoint: str, data: Dict, method: str = 'POST') -> requests.Response:
+        """Make HTTP request with error handling."""
+        url = urljoin(self.base_url, endpoint)
+        try:
+            if method == 'POST':
+                response = self.session.post(url, data=data, headers=self.headers, timeout=10)
+            else:
+                response = self.session.get(url, params=data, headers=self.headers, timeout=10)
+            
             response.raise_for_status()
             return response
+            
         except requests.RequestException as e:
-            app.logger.error(f"Request failed: {str(e)}")
-            return None
+            raise Exception(f"Request failed: {str(e)}")
 
-    def configure_printer(self) -> Dict[str, any]:
-        """Configure the printer with all settings."""
-        results = {
-            'success': False,
-            'steps': [],
-            'error': None
-        }
-
-        try:
-            # First verify we can reach the printer
-            try:
-                response = requests.get(f"{self.base_url}/", timeout=5)
-                if response.status_code != 200:
-                    results['error'] = f"Printer returned status {response.status_code}"
-                    return results
-            except requests.RequestException as e:
-                results['error'] = f"Cannot connect to printer: {str(e)}"
-                return results
-
-            # Full configuration sequence for all environments
-            steps = [
-                (self.login, "Login"),
-                (self.update_media_setup, "Media Setup"),
-                (self.update_general_setup, "General Setup"),
-                (self.request_feed, "Feed Request"),
-                (lambda: self.update_general_setup(True), "Cutter Mode Setup"),
-                (self.print_test, "Test Print"),
-                (self.save_settings, "Save Settings")
-            ]
-
-            for operation, description in steps:
-                try:
-                    if operation():
-                        results['steps'].append({'step': description, 'status': 'success'})
-                        time.sleep(2)  # Consistent delay for all environments
-                    else:
-                        results['error'] = f"Failed at step: {description}"
-                        return results
-                except Exception as e:
-                    results['error'] = f"Error during {description}: {str(e)}"
-                    return results
-
-            results['success'] = True
-            return results
-
-        except Exception as e:
-            results['error'] = str(e)
-            return results
-
-    def login(self) -> bool:
+    def login(self):
         """Authenticate with the printer."""
-        response = self._make_request('/settings', self._credentials)
-        return bool(response)
+        response = self._make_request('/login', self._credentials)
+        if "Incorrect" in response.text:
+            raise Exception("Login failed: Invalid credentials")
+        return response
 
-    def update_media_setup(self) -> bool:
+    def update_media_setup(self):
         """Update media configuration."""
-        response = self._make_request('/setmed', self.config.media_setup)
-        return bool(response)
+        data = {
+            "1": "0",  # Media type
+            "16": "0", # Print mode
+            "15": "0"  # Media tracking
+        }
+        return self._make_request('/media_setup', data)
 
-    def update_general_setup(self, cutter_mode: bool = False) -> bool:
+    def update_general_setup(self, cutter_mode: bool = False):
         """Update general configuration."""
-        data = self.config.general_setup.copy()
-        if cutter_mode:
-            data["6"] = "1"
-        response = self._make_request('/setgen', data)
-        return bool(response)
+        data = {
+            "1": "0",   # Print method
+            "12": "0"   # Print width
+        }
+        return self._make_request('/general_setup', data)
 
-    def save_settings(self) -> bool:
+    def save_settings(self):
         """Save current configuration."""
-        response = self._make_request('/settings', self.config.settings_setup)
-        return bool(response)
+        data = {"1": "1"}  # Save flag
+        return self._make_request('/save_settings', data)
 
-    def request_feed(self) -> bool:
+    def request_feed(self):
         """Request paper feed."""
-        response = self._make_request('/control', self.config.feed_request)
-        return bool(response)
+        data = {"1": "1"}  # Feed request
+        return self._make_request('/feed', data)
 
-    def print_test(self) -> bool:
+    def print_test(self):
         """Perform test print."""
-        response = self._make_request('/setlst', self.config.test_print)
-        return bool(response)
+        data = {"1": "1"}  # Test print flag
+        return self._make_request('/test_print', data)
 
 @app.route('/')
 def home():
