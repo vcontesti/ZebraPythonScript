@@ -83,6 +83,13 @@ HTML_TEMPLATE = """
             border-radius: 4px;
             display: none;
         }
+        .proxy-settings {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            display: none;
+        }
         .environment-badge {
             display: inline-block;
             padding: 5px 10px;
@@ -112,6 +119,7 @@ HTML_TEMPLATE = """
         </div>
         <div class="form-group">
             <a href="#" onclick="toggleAdvanced()">Advanced Settings</a>
+            <a href="#" onclick="toggleProxy()">Proxy Settings</a>
         </div>
         <div id="advancedSettings" class="advanced-settings">
             <div class="form-group">
@@ -121,6 +129,13 @@ HTML_TEMPLATE = """
             <div class="form-group">
                 <label for="password">Password:</label>
                 <input type="password" id="password" name="password" value="1234">
+            </div>
+        </div>
+        <div id="proxySettings" class="proxy-settings">
+            <div class="form-group">
+                <label for="proxy_url">Proxy URL:</label>
+                <input type="text" id="proxy_url" name="proxy_url" placeholder="Enter ngrok proxy URL">
+                <small>Required when accessing from render.com</small>
             </div>
         </div>
         <button onclick="testConnection()">Test Connection</button>
@@ -142,18 +157,31 @@ HTML_TEMPLATE = """
                     '💻 Running Locally';
             });
 
+        function toggleProxy() {
+            const proxySettings = document.getElementById('proxySettings');
+            proxySettings.style.display = proxySettings.style.display === 'none' ? 'block' : 'none';
+        }
+
+        function clearResults() {
+            document.getElementById('testResult').style.display = 'none';
+            document.getElementById('configResult').style.display = 'none';
+        }
+
         function toggleAdvanced() {
             const advancedSettings = document.getElementById('advancedSettings');
             advancedSettings.style.display = advancedSettings.style.display === 'none' ? 'block' : 'none';
         }
 
         function testConnection() {
+            clearResults();  // Clear previous results
             const printerIp = document.getElementById('printer_ip').value;
+            const proxyUrl = document.getElementById('proxy_url').value;
             const resultDiv = document.getElementById('testResult');
             
             if (!printerIp) {
                 resultDiv.className = 'error';
                 resultDiv.innerHTML = 'Please enter a printer IP address';
+                resultDiv.style.display = 'block';
                 return;
             }
             
@@ -163,6 +191,9 @@ HTML_TEMPLATE = """
             
             const formData = new FormData();
             formData.append('printer_ip', printerIp);
+            if (proxyUrl) {
+                formData.append('proxy_url', proxyUrl);
+            }
             
             fetch('/test_connection', {
                 method: 'POST',
@@ -175,13 +206,6 @@ HTML_TEMPLATE = """
                     resultDiv.innerHTML = `Error: ${data.error}`;
                 } else {
                     let html = '<h3>Connection Test Results:</h3>';
-                    
-                    // Show ping result only if available
-                    if ('ping' in data) {
-                        html += `<p>Ping Test: ${data.ping ? '✅' : '❌'}</p>`;
-                    }
-                    
-                    // Always show port and HTTP results
                     html += `<p>Printer Port (9100): ${data.port_9100 ? '✅' : '❌'}</p>`;
                     html += `<p>HTTP Connection: ${data.http ? '✅' : '❌'}</p>`;
                     
@@ -202,14 +226,17 @@ HTML_TEMPLATE = """
         }
         
         function configurePrinter() {
+            clearResults();  // Clear previous results
             const printerIp = document.getElementById('printer_ip').value;
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
+            const proxyUrl = document.getElementById('proxy_url').value;
             const resultDiv = document.getElementById('configResult');
             
             if (!printerIp) {
                 resultDiv.className = 'error';
                 resultDiv.innerHTML = 'Please enter a printer IP address';
+                resultDiv.style.display = 'block';
                 return;
             }
             
@@ -221,6 +248,9 @@ HTML_TEMPLATE = """
             formData.append('printer_ip', printerIp);
             formData.append('username', username);
             formData.append('password', password);
+            if (proxyUrl) {
+                formData.append('proxy_url', proxyUrl);
+            }
             
             fetch('/configure', {
                 method: 'POST',
@@ -283,7 +313,7 @@ class PrinterConfig:
 class ZebraPrinter:
     """Class to manage Zebra printer operations."""
     
-    def __init__(self, ip_address: str, username: str = "admin", password: str = "1234"):
+    def __init__(self, ip_address: str, username: str = "admin", password: str = "1234", proxy_url: str = None):
         """Initialize printer with connection details."""
         self.validate_ip_address(ip_address)
         self.base_url = f"http://{ip_address}"
@@ -291,6 +321,7 @@ class ZebraPrinter:
         self.config = PrinterConfig()
         self._credentials = {"0": username, "1": password}
         self.headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        self.proxy_url = proxy_url
         
     @staticmethod
     def validate_ip_address(ip: str) -> bool:
@@ -304,9 +335,14 @@ class ZebraPrinter:
         """Make HTTP request with error handling."""
         try:
             url = urljoin(self.base_url, endpoint)
+            
+            # If proxy URL is set, modify the target URL
+            if self.proxy_url:
+                # Replace the local IP with the proxy URL
+                url = url.replace(self.base_url, self.proxy_url)
+            
             # First check if we can reach the printer
             try:
-                # Use a quick HEAD request first to check connectivity
                 requests.head(url, timeout=5)
             except requests.RequestException:
                 app.logger.error(f"Cannot reach printer at {url}")
@@ -427,10 +463,11 @@ def configure_printer():
     printer_ip = request.form.get('printer_ip', '').strip()
     username = request.form.get('username', 'admin').strip()
     password = request.form.get('password', '1234').strip()
+    proxy_url = request.form.get('proxy_url', '').strip()  # New proxy URL parameter
 
     try:
         # Initialize and configure printer
-        printer = ZebraPrinter(printer_ip, username, password)
+        printer = ZebraPrinter(printer_ip, username, password, proxy_url)
         results = printer.configure_printer()
         
         if results['success']:
@@ -453,6 +490,7 @@ def configure_printer():
 @app.route('/test_connection', methods=['POST'])
 def test_connection():
     printer_ip = request.form.get('printer_ip', '').strip()
+    proxy_url = request.form.get('proxy_url', '').strip()
     
     try:
         # Validate IP format
@@ -482,9 +520,16 @@ def test_connection():
             response = requests.get(f'http://{printer_ip}', timeout=5)
             results['http'] = response.status_code == 200
             results['details'].append(f'HTTP connection: Status {response.status_code}')
-        except Exception as e:
+        except requests.Timeout:
+            print("HTTP connection timed out")
+            results['details'].append('HTTP connection timed out')
+        except requests.ConnectionError as e:
+            print(f"HTTP connection error: {e}")
+            results['details'].append(f'HTTP connection refused: {str(e)}')
+        except requests.RequestException as e:
+            print(f"HTTP request error: {e}")
             results['details'].append(f'HTTP connection failed: {str(e)}')
-            
+
         return jsonify(results)
             
     except ValueError:
