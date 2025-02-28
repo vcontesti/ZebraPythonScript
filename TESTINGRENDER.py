@@ -138,8 +138,8 @@ HTML_TEMPLATE = """
                 const isRender = window.location.hostname.includes('onrender.com');
                 badge.className = `environment-badge ${isRender ? 'render' : 'local'}`;
                 badge.innerHTML = isRender ? 
-                    '🌐 Running on Render (Limited Configuration)' : 
-                    '💻 Running Locally (Full Configuration)';
+                    '🌐 Running on Render' : 
+                    '💻 Running Locally';
             });
 
         function toggleAdvanced() {
@@ -335,58 +335,38 @@ class ZebraPrinter:
         }
 
         try:
-            # Check if we're running on render
-            if os.environ.get('RENDER'):
-                # For render, we'll use a simplified configuration approach
-                # First verify we can reach the printer
-                try:
-                    response = requests.get(f"{self.base_url}/", timeout=5)
-                    if response.status_code != 200:
-                        results['error'] = f"Printer returned status {response.status_code}"
-                        return results
-                except requests.RequestException as e:
-                    results['error'] = f"Cannot connect to printer: {str(e)}"
+            # First verify we can reach the printer
+            try:
+                response = requests.get(f"{self.base_url}/", timeout=5)
+                if response.status_code != 200:
+                    results['error'] = f"Printer returned status {response.status_code}"
                     return results
+            except requests.RequestException as e:
+                results['error'] = f"Cannot connect to printer: {str(e)}"
+                return results
 
-                # Simplified configuration steps for render
-                steps = [
-                    (self.login, "Login"),
-                    (self.update_media_setup, "Media Setup"),
-                    (self.update_general_setup, "General Setup"),
-                    (self.save_settings, "Save Settings")
-                ]
+            # Full configuration sequence for all environments
+            steps = [
+                (self.login, "Login"),
+                (self.update_media_setup, "Media Setup"),
+                (self.update_general_setup, "General Setup"),
+                (self.request_feed, "Feed Request"),
+                (lambda: self.update_general_setup(True), "Cutter Mode Setup"),
+                (self.print_test, "Test Print"),
+                (self.save_settings, "Save Settings")
+            ]
 
-                for operation, description in steps:
-                    try:
-                        if operation():
-                            results['steps'].append({'step': description, 'status': 'success'})
-                            time.sleep(1)  # Reduced delay for render
-                        else:
-                            results['error'] = f"Failed at step: {description}"
-                            return results
-                    except Exception as e:
-                        results['error'] = f"Error during {description}: {str(e)}"
-                        return results
-
-            else:
-                # For local environment, use the full configuration sequence
-                steps = [
-                    (self.login, "Login"),
-                    (self.update_media_setup, "Media Setup"),
-                    (self.update_general_setup, "General Setup"),
-                    (self.request_feed, "Feed Request"),
-                    (lambda: self.update_general_setup(True), "Cutter Mode Setup"),
-                    (self.print_test, "Test Print"),
-                    (self.save_settings, "Save Settings")
-                ]
-
-                for operation, description in steps:
+            for operation, description in steps:
+                try:
                     if operation():
                         results['steps'].append({'step': description, 'status': 'success'})
-                        time.sleep(2)
+                        time.sleep(2)  # Consistent delay for all environments
                     else:
                         results['error'] = f"Failed at step: {description}"
                         return results
+                except Exception as e:
+                    results['error'] = f"Error during {description}: {str(e)}"
+                    return results
 
             results['success'] = True
             return results
@@ -475,44 +455,37 @@ def test_connection():
     printer_ip = request.form.get('printer_ip', '').strip()
     
     try:
-        # First validate IP format
+        # Validate IP format
         ipaddress.ip_address(printer_ip)
         
-        # For render website, we'll use a simpler connection test that doesn't rely on local network commands
-        if os.environ.get('RENDER') or not os.name == 'nt':  # Check if we're on render or not on Windows
-            results = {
-                'ip': printer_ip,
-                'ping': False,
-                'port_9100': False,
-                'http': False,
-                'details': []
-            }
+        results = {
+            'ip': printer_ip,
+            'port_9100': False,
+            'http': False,
+            'details': []
+        }
+        
+        # Test port 9100
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            result = sock.connect_ex((printer_ip, 9100))
+            sock.close()
             
-            # Use socket for basic connection test
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
-                result = sock.connect_ex((printer_ip, 9100))
-                sock.close()
-                
-                results['port_9100'] = result == 0
-                results['details'].append(f'Port 9100: {"open" if result == 0 else "closed"}')
-            except Exception as e:
-                results['details'].append(f'Port 9100 test error: {str(e)}')
+            results['port_9100'] = result == 0
+            results['details'].append(f'Port 9100: {"open" if result == 0 else "closed"}')
+        except Exception as e:
+            results['details'].append(f'Port 9100 test error: {str(e)}')
 
-            # Try HTTP connection
-            try:
-                response = requests.get(f'http://{printer_ip}', timeout=5)
-                results['http'] = response.status_code == 200
-                results['details'].append(f'HTTP connection: Status {response.status_code}')
-            except Exception as e:
-                results['details'].append(f'HTTP connection failed: {str(e)}')
-                
-            return jsonify(results)
-        else:
-            # On localhost/Windows, use our full test suite
-            results = test_printer_connection(printer_ip)
-            return jsonify(results)
+        # Test HTTP connection
+        try:
+            response = requests.get(f'http://{printer_ip}', timeout=5)
+            results['http'] = response.status_code == 200
+            results['details'].append(f'HTTP connection: Status {response.status_code}')
+        except Exception as e:
+            results['details'].append(f'HTTP connection failed: {str(e)}')
+            
+        return jsonify(results)
             
     except ValueError:
         return jsonify({'error': 'Invalid IP address format'}), 400
