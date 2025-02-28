@@ -199,14 +199,14 @@ def configure_printer(printer_ip):
         return {"status": "error", "message": f"Failed to configure printer: {str(e)}"}
 
 def test_printer_port(ip, port, timeout=10):
-    """Test a specific printer port using PowerShell's Test-NetConnection"""
+    """Test a specific printer port using Test-NetConnection"""
     try:
-        # Use PowerShell's Test-NetConnection which is more reliable
+        # Use Test-NetConnection which we know works
         cmd = f'powershell -Command "Test-NetConnection -ComputerName {ip} -Port {port} | Select-Object -ExpandProperty TcpTestSucceeded"'
         result = os.popen(cmd).read().strip().lower()
         
         success = result == "true"
-        print(f"PowerShell Test-NetConnection to {ip}:{port} {'succeeded' if success else 'failed'}")
+        print(f"Test-NetConnection to {ip}:{port} {'succeeded' if success else 'failed'}")
         return success, f"Port {port} is {'open' if success else 'closed'}"
         
     except Exception as e:
@@ -214,7 +214,7 @@ def test_printer_port(ip, port, timeout=10):
         return False, f"Port {port} test error: {str(e)}"
 
 def test_printer_connection(printer_ip):
-    """Test printer connectivity using PowerShell for more reliable results"""
+    """Test printer connectivity"""
     results = {
         'ip': printer_ip,
         'ping': False,
@@ -223,52 +223,48 @@ def test_printer_connection(printer_ip):
         'details': []
     }
     
-    # Test ping first
+    # Test ping
     try:
         print(f"\nPinging {printer_ip}...")
-        # Use PowerShell's Test-Connection for more reliable results
-        cmd = f'powershell -Command "Test-Connection -ComputerName {printer_ip} -Count 2 -Quiet"'
-        ping_result = os.popen(cmd).read().strip().lower()
-        
-        results['ping'] = ping_result == "true"
+        ping_output = os.popen(f'ping -n 2 -w 1000 {printer_ip}').read()
+        results['ping'] = "bytes=" in ping_output
         results['details'].append(f'Ping test: {"Successful" if results["ping"] else "Failed"}')
-        
-        # Get detailed ping info
-        ping_output = os.popen(f'ping -n 4 -w 2000 {printer_ip}').read()
         results['details'].append(f'Ping details:\n{ping_output}')
     except Exception as e:
         print(f"Error during ping: {e}")
         results['details'].append(f'Ping error: {str(e)}')
 
-    if results['ping']:
-        # Test printer port 9100
-        success, message = test_printer_port(printer_ip, 9100)
-        results['port_9100'] = success
-        results['details'].append(f'Printer port (9100): {message}')
+    # Always test port 9100 regardless of ping
+    print(f"\nTesting printer port 9100...")
+    success, message = test_printer_port(printer_ip, 9100)
+    results['port_9100'] = success
+    results['details'].append(f'Printer port (9100): {message}')
 
-        # Test HTTP connection
-        try:
-            print(f"\nTesting HTTP connection to {printer_ip}...")
-            response = requests.get(f'http://{printer_ip}', timeout=10)
-            results['http'] = response.status_code == 200
-            results['details'].append(f'HTTP connection: Status {response.status_code}')
-        except requests.Timeout:
-            print("HTTP connection timed out")
-            results['details'].append('HTTP connection timed out')
-        except requests.ConnectionError as e:
-            print(f"HTTP connection error: {e}")
-            results['details'].append(f'HTTP connection refused: {str(e)}')
-        except requests.RequestException as e:
-            print(f"HTTP request error: {e}")
-            results['details'].append(f'HTTP connection failed: {str(e)}')
-    else:
-        results['details'].append('Skipping port tests as ping failed')
+    # Test HTTP connection
+    try:
+        print(f"\nTesting HTTP connection to {printer_ip}...")
+        response = requests.get(f'http://{printer_ip}', timeout=5)
+        results['http'] = response.status_code == 200
+        results['details'].append(f'HTTP connection: Status {response.status_code}')
+    except requests.Timeout:
+        print("HTTP connection timed out")
+        results['details'].append('HTTP connection timed out')
+    except requests.ConnectionError as e:
+        print(f"HTTP connection error: {e}")
+        results['details'].append(f'HTTP connection refused: {str(e)}')
+    except requests.RequestException as e:
+        print(f"HTTP request error: {e}")
+        results['details'].append(f'HTTP connection failed: {str(e)}')
 
     return results
 
 @app.route('/')
 def home():
     return render_template_string(HTML_TEMPLATE)
+
+@app.route('/api/status')
+def api_status():
+    return jsonify({"status": "success", "message": "Zebra Printer Configuration API"})
 
 @app.route('/configure', methods=['POST'])
 def configure():
