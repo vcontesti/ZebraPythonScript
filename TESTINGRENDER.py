@@ -173,7 +173,7 @@ HTML_TEMPLATE = """
         }
 
         function testConnection() {
-            clearResults();  // Clear previous results
+            clearResults();
             const printerIp = document.getElementById('printer_ip').value;
             const proxyUrl = document.getElementById('proxy_url').value;
             const resultDiv = document.getElementById('testResult');
@@ -189,17 +189,36 @@ HTML_TEMPLATE = """
             resultDiv.innerHTML = 'Testing connection...';
             resultDiv.className = '';
             
-            const formData = new FormData();
-            formData.append('printer_ip', printerIp);
-            if (proxyUrl) {
-                formData.append('proxy_url', proxyUrl);
+            const testUrl = proxyUrl ? 
+                `${proxyUrl}?printer_ip=${encodeURIComponent(printerIp)}` :
+                '/test_connection';
+
+            const headers = proxyUrl ? 
+                {
+                    'Accept': 'application/json'
+                } : 
+                {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                };
+
+            const fetchOptions = {
+                method: proxyUrl ? 'GET' : 'POST',
+                headers: headers
+            };
+
+            if (!proxyUrl) {
+                const formData = new FormData();
+                formData.append('printer_ip', printerIp);
+                fetchOptions.body = formData;
             }
             
-            fetch('/test_connection', {
-                method: 'POST',
-                body: formData
+            fetch(testUrl, fetchOptions)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
             })
-            .then(response => response.json())
             .then(data => {
                 if (data.error) {
                     resultDiv.className = 'error';
@@ -222,11 +241,12 @@ HTML_TEMPLATE = """
             .catch(error => {
                 resultDiv.className = 'error';
                 resultDiv.innerHTML = `Error: ${error.message}`;
+                console.error('Error:', error);
             });
         }
         
         function configurePrinter() {
-            clearResults();  // Clear previous results
+            clearResults();
             const printerIp = document.getElementById('printer_ip').value;
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
@@ -243,20 +263,32 @@ HTML_TEMPLATE = """
             resultDiv.style.display = 'block';
             resultDiv.innerHTML = 'Configuring printer...';
             resultDiv.className = '';
+
+            const configUrl = proxyUrl ? `${proxyUrl}/configure` : '/configure';
+            const headers = {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            };
             
-            const formData = new FormData();
+            if (proxyUrl) {
+                headers['X-Printer-IP'] = printerIp;
+            }
+
+            const formData = new URLSearchParams();
             formData.append('printer_ip', printerIp);
             formData.append('username', username);
             formData.append('password', password);
-            if (proxyUrl) {
-                formData.append('proxy_url', proxyUrl);
-            }
             
-            fetch('/configure', {
+            fetch(configUrl, {
                 method: 'POST',
+                headers: headers,
                 body: formData
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
             .then(data => {
                 if (data.error) {
                     resultDiv.className = 'error';
@@ -280,6 +312,7 @@ HTML_TEMPLATE = """
             .catch(error => {
                 resultDiv.className = 'error';
                 resultDiv.innerHTML = `Error: ${error.message}`;
+                console.error('Error:', error);
             });
         }
     </script>
