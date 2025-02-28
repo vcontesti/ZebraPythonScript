@@ -79,7 +79,7 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        function configurePrinter() {
+        async function configurePrinter() {
             const printerIp = document.getElementById('printer_ip').value;
             const resultDiv = document.getElementById('result');
             
@@ -92,22 +92,27 @@ HTML_TEMPLATE = """
             resultDiv.textContent = 'Configuring printer...';
             resultDiv.className = '';
 
-            fetch('/configure', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ printer_ip: printerIp })
-            })
-            .then(response => response.json())
-            .then(data => {
-                resultDiv.textContent = data.message;
+            try {
+                const response = await fetch('/configure', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ printer_ip: printerIp })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                resultDiv.textContent = data.message || 'Configuration completed';
                 resultDiv.className = data.status === 'success' ? 'success' : 'error';
-            })
-            .catch(error => {
-                resultDiv.textContent = 'Error: ' + error.message;
+            } catch (error) {
+                console.error('Error:', error);
+                resultDiv.textContent = 'Error: Could not connect to the printer. Please check the IP address and try again.';
                 resultDiv.className = 'error';
-            });
+            }
         }
     </script>
 </body>
@@ -117,17 +122,17 @@ HTML_TEMPLATE = """
 def configure_printer(printer_ip):
     session = requests.Session()
 
-    # Define the URLs
-    media_setup_url = f"http://{printer_ip}/setmed"
-    general_setup_url = f"http://{printer_ip}/setgen"
-    settings_setup_url = f"http://{printer_ip}/settings"
-    feed_request_url = f"http://{printer_ip}/control"
-    test_print_url = f"http://{printer_ip}/setlst"
-
     try:
+        # Define the URLs
+        media_setup_url = f"http://{printer_ip}/setmed"
+        general_setup_url = f"http://{printer_ip}/setgen"
+        settings_setup_url = f"http://{printer_ip}/settings"
+        feed_request_url = f"http://{printer_ip}/control"
+        test_print_url = f"http://{printer_ip}/setlst"
+
         # Login data
         login_data = {"0": "admin", "1": "1234"}
-        login_response = session.post(settings_setup_url, data=login_data)
+        login_response = session.post(settings_setup_url, data=login_data, timeout=10)
         login_response.raise_for_status()
 
         # Payloads
@@ -140,18 +145,23 @@ def configure_printer(printer_ip):
 
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
-        # Apply settings
-        session.post(media_setup_url, data=media_setup_data, headers=headers).raise_for_status()
-        session.post(general_setup_url, data=general_setup_data, headers=headers).raise_for_status()
+        # Apply settings with timeout and error checking
+        session.post(media_setup_url, data=media_setup_data, headers=headers, timeout=10).raise_for_status()
+        session.post(general_setup_url, data=general_setup_data, headers=headers, timeout=10).raise_for_status()
         time.sleep(1)
-        session.post(feed_request_url, data=feed_request_data, headers=headers).raise_for_status()
+        session.post(feed_request_url, data=feed_request_data, headers=headers, timeout=10).raise_for_status()
         time.sleep(2)
-        session.post(general_setup_url, data=second_general_setup_data, headers=headers).raise_for_status()
+        session.post(general_setup_url, data=second_general_setup_data, headers=headers, timeout=10).raise_for_status()
         time.sleep(2)
-        session.post(test_print_url, data=test_print_data, headers=headers).raise_for_status()
-        session.post(settings_setup_url, data=settings_setup_data, headers=headers).raise_for_status()
+        session.post(test_print_url, data=test_print_data, headers=headers, timeout=10).raise_for_status()
+        session.post(settings_setup_url, data=settings_setup_data, headers=headers, timeout=10).raise_for_status()
 
         return {"status": "success", "message": "Printer configured successfully"}
+
+    except requests.Timeout:
+        return {"status": "error", "message": "Connection timed out. Please check if the printer is accessible."}
+    except requests.ConnectionError:
+        return {"status": "error", "message": "Could not connect to the printer. Please check the IP address and network connection."}
     except requests.RequestException as e:
         return {"status": "error", "message": f"Failed to configure printer: {str(e)}"}
 
