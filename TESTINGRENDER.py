@@ -88,6 +88,12 @@ HTML_TEMPLATE = """
             const printerIp = document.getElementById('printer_ip').value;
             const resultDiv = document.getElementById('testResult');
             
+            if (!printerIp) {
+                resultDiv.className = 'error';
+                resultDiv.innerHTML = 'Please enter a printer IP address';
+                return;
+            }
+            
             resultDiv.style.display = 'block';
             resultDiv.innerHTML = 'Testing connection...';
             resultDiv.className = '';
@@ -106,16 +112,23 @@ HTML_TEMPLATE = """
                     resultDiv.innerHTML = `Error: ${data.error}`;
                 } else {
                     let html = '<h3>Connection Test Results:</h3>';
-                    html += `<p>Ping Test: ${data.ping ? '✅' : '❌'}</p>`;
+                    
+                    // Show ping result only if available
+                    if ('ping' in data) {
+                        html += `<p>Ping Test: ${data.ping ? '✅' : '❌'}</p>`;
+                    }
+                    
+                    // Always show port and HTTP results
                     html += `<p>Printer Port (9100): ${data.port_9100 ? '✅' : '❌'}</p>`;
                     html += `<p>HTTP Connection: ${data.http ? '✅' : '❌'}</p>`;
+                    
                     html += '<h4>Details:</h4><ul>';
                     data.details.forEach(detail => {
                         html += `<li>${detail}</li>`;
                     });
                     html += '</ul>';
                     
-                    resultDiv.className = data.ping || data.port_9100 || data.http ? 'success' : 'error';
+                    resultDiv.className = data.port_9100 ? 'success' : 'error';
                     resultDiv.innerHTML = html;
                 }
             })
@@ -128,6 +141,12 @@ HTML_TEMPLATE = """
         function configurePrinter() {
             const printerIp = document.getElementById('printer_ip').value;
             const resultDiv = document.getElementById('testResult');
+            
+            if (!printerIp) {
+                resultDiv.className = 'error';
+                resultDiv.innerHTML = 'Please enter a printer IP address';
+                return;
+            }
             
             resultDiv.style.display = 'block';
             resultDiv.innerHTML = 'Configuring printer...';
@@ -300,13 +319,45 @@ def test_connection():
     printer_ip = request.form.get('printer_ip', '').strip()
     
     try:
-        # Validate IP format first
+        # First validate IP format
         ipaddress.ip_address(printer_ip)
         
-        # Run connection tests
-        results = test_printer_connection(printer_ip)
-        return jsonify(results)
-        
+        # For render website, we'll use a simpler connection test that doesn't rely on local network commands
+        if os.environ.get('RENDER') or not os.name == 'nt':  # Check if we're on render or not on Windows
+            results = {
+                'ip': printer_ip,
+                'ping': False,
+                'port_9100': False,
+                'http': False,
+                'details': []
+            }
+            
+            # Use socket for basic connection test
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(5)
+                result = sock.connect_ex((printer_ip, 9100))
+                sock.close()
+                
+                results['port_9100'] = result == 0
+                results['details'].append(f'Port 9100: {"open" if result == 0 else "closed"}')
+            except Exception as e:
+                results['details'].append(f'Port 9100 test error: {str(e)}')
+
+            # Try HTTP connection
+            try:
+                response = requests.get(f'http://{printer_ip}', timeout=5)
+                results['http'] = response.status_code == 200
+                results['details'].append(f'HTTP connection: Status {response.status_code}')
+            except Exception as e:
+                results['details'].append(f'HTTP connection failed: {str(e)}')
+                
+            return jsonify(results)
+        else:
+            # On localhost/Windows, use our full test suite
+            results = test_printer_connection(printer_ip)
+            return jsonify(results)
+            
     except ValueError:
         return jsonify({'error': 'Invalid IP address format'}), 400
     except Exception as e:
