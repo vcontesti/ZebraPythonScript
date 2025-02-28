@@ -70,22 +70,22 @@ class ProxyHandler(BaseHTTPRequestHandler):
             config_steps = [
                 {
                     'name': 'Login',
-                    'url': f'http://{printer_ip}/login',
+                    'url': f'http://{printer_ip}/settings',
                     'data': urllib.parse.urlencode({'0': username, '1': password}).encode()
                 },
                 {
                     'name': 'Media Setup',
-                    'url': f'http://{printer_ip}/media_setup',
+                    'url': f'http://{printer_ip}/setmed',
                     'data': urllib.parse.urlencode({'1': '0', '16': '0', '15': '0'}).encode()
                 },
                 {
                     'name': 'General Setup',
-                    'url': f'http://{printer_ip}/general_setup',
+                    'url': f'http://{printer_ip}/setgen',
                     'data': urllib.parse.urlencode({'1': '0', '12': '0'}).encode()
                 },
                 {
                     'name': 'Save Settings',
-                    'url': f'http://{printer_ip}/save_settings',
+                    'url': f'http://{printer_ip}/settings',
                     'data': urllib.parse.urlencode({'1': '1'}).encode()
                 }
             ]

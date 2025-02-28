@@ -387,7 +387,7 @@ class ZebraPrinter:
 
     def login(self):
         """Authenticate with the printer."""
-        response = self._make_request('/login', self._credentials)
+        response = self._make_request('/settings', self._credentials)
         if "Incorrect" in response.text:
             raise Exception("Login failed: Invalid credentials")
         return response
@@ -399,7 +399,7 @@ class ZebraPrinter:
             "16": "0", # Print mode
             "15": "0"  # Media tracking
         }
-        return self._make_request('/media_setup', data)
+        return self._make_request('/setmed', data)
 
     def update_general_setup(self, cutter_mode: bool = False):
         """Update general configuration."""
@@ -407,12 +407,12 @@ class ZebraPrinter:
             "1": "0",   # Print method
             "12": "0"   # Print width
         }
-        return self._make_request('/general_setup', data)
+        return self._make_request('/setgen', data)
 
     def save_settings(self):
         """Save current configuration."""
         data = {"1": "1"}  # Save flag
-        return self._make_request('/save_settings', data)
+        return self._make_request('/settings', data)
 
     def request_feed(self):
         """Request paper feed."""
