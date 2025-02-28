@@ -1,11 +1,119 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 import requests
 import time
 import os
 
 app = Flask(__name__)
 
-# Function to configure the printer
+# HTML template for the web interface
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Zebra Printer Configuration</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            margin: 8px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #dff0d8;
+            color: #3c763d;
+            border: 1px solid #d6e9c6;
+        }
+        .error {
+            background-color: #f2dede;
+            color: #a94442;
+            border: 1px solid #ebccd1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Zebra Printer Configuration</h1>
+        <div class="form-group">
+            <label for="printer_ip">Printer IP Address:</label>
+            <input type="text" id="printer_ip" placeholder="Enter printer IP address">
+        </div>
+        <button onclick="configurePrinter()">Configure Printer</button>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        function configurePrinter() {
+            const printerIp = document.getElementById('printer_ip').value;
+            const resultDiv = document.getElementById('result');
+            
+            if (!printerIp) {
+                resultDiv.className = 'error';
+                resultDiv.textContent = 'Please enter a printer IP address';
+                return;
+            }
+
+            resultDiv.textContent = 'Configuring printer...';
+            resultDiv.className = '';
+
+            fetch('/configure', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ printer_ip: printerIp })
+            })
+            .then(response => response.json())
+            .then(data => {
+                resultDiv.textContent = data.message;
+                resultDiv.className = data.status === 'success' ? 'success' : 'error';
+            })
+            .catch(error => {
+                resultDiv.textContent = 'Error: ' + error.message;
+                resultDiv.className = 'error';
+            });
+        }
+    </script>
+</body>
+</html>
+"""
+
 def configure_printer(printer_ip):
     session = requests.Session()
 
@@ -45,13 +153,12 @@ def configure_printer(printer_ip):
 
         return {"status": "success", "message": "Printer configured successfully"}
     except requests.RequestException as e:
-        return {"status": "error", "message": f"Failed to configure printer: {str(e)}"}, 500
+        return {"status": "error", "message": f"Failed to configure printer: {str(e)}"}
 
 @app.route('/')
 def home():
-    return jsonify({"status": "success", "message": "Zebra Printer Configuration API"})
+    return render_template_string(HTML_TEMPLATE)
 
-# API Route to configure printer
 @app.route('/configure', methods=['POST'])
 def configure():
     try:
