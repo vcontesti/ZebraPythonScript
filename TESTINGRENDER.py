@@ -266,7 +266,7 @@ HTML_TEMPLATE = """
 
             const configUrl = proxyUrl ? 
                 `${proxyUrl}/configure` : 
-                '/configure';
+                '/configure_printer';
             
             const headers = {
                 'Content-Type': 'application/x-www-form-urlencoded'
@@ -386,36 +386,31 @@ class ZebraPrinter:
             raise Exception(f"Request failed: {str(e)}")
 
     def login(self):
-        """Authenticate with the printer by checking available login fields."""
-        # First try to check what fields are available
-        try:
-            response = self._make_request('/settings', {}, method='GET')
-            has_username = 'username' in response.text.lower()
-            has_password = 'password' in response.text.lower()
-            
-            # Prepare credentials based on available fields
-            creds = {}
-            if has_username:
-                creds['0'] = self._credentials['0']  # username
-            if has_password:
-                creds['1'] = self._credentials['1']  # password
-                
-            # If no fields detected, try both
-            if not creds:
-                creds = self._credentials
-                
-            # Attempt login
-            response = self._make_request('/settings', creds)
-            if "Incorrect" in response.text:
-                raise Exception("Login failed: Invalid credentials")
-            return response
-            
-        except Exception as e:
-            # If checking fails, try with both credentials
-            response = self._make_request('/settings', self._credentials)
-            if "Incorrect" in response.text:
-                raise Exception("Login failed: Invalid credentials")
-            return response
+        """Authenticate with the printer by trying different credential combinations."""
+        print("Attempting login with different credential combinations...")
+        
+        # Try different combinations
+        combinations = [
+            ({'1': self._credentials['1']}, "password only"),
+            ({'0': self._credentials['0']}, "username only"),
+            (self._credentials, "both username and password")
+        ]
+        
+        last_error = None
+        for creds, desc in combinations:
+            try:
+                print(f"Trying {desc}...")
+                response = self._make_request('/settings', creds)
+                if "Incorrect" not in response.text:
+                    print(f"Success with {desc}")
+                    return response
+            except Exception as e:
+                last_error = e
+                print(f"Failed with {desc}: {str(e)}")
+                continue
+        
+        # If all attempts failed
+        raise Exception(f"Login failed with all combinations: {str(last_error)}")
 
     def update_media_setup(self):
         """Update media configuration."""
@@ -462,61 +457,91 @@ def api_status():
         "environment": "render" if os.environ.get('RENDER') else "local"
     })
 
-@app.route('/configure', methods=['POST'])
+@app.route('/configure_printer', methods=['POST'])
 def configure_printer():
-    printer_ip = request.form.get('printer_ip', '').strip()
-    username = request.form.get('username', 'admin').strip()
-    password = request.form.get('password', '1234').strip()
-    proxy_url = request.form.get('proxy_url', '').strip()
-
+    """Configure a Zebra printer with the provided settings."""
     try:
-        # Initialize printer configuration
-        printer = ZebraPrinter(printer_ip, username, password, proxy_url)
-        
-        # Perform configuration steps
-        steps = []
-        
+        # Get form data
+        ip_address = request.form.get('printer_ip')
+        username = request.form.get('username', 'admin')
+        password = request.form.get('password', '1234')
+        proxy_url = request.form.get('proxy_url')
+
+        # Validate IP
+        if not ip_address:
+            return jsonify({'success': False, 'error': 'IP address is required'})
+
+        # Initialize printer
+        printer = ZebraPrinter(ip_address, username, password, proxy_url)
+
+        # If using proxy, send configuration request to proxy
+        if proxy_url:
+            try:
+                proxy_response = requests.post(
+                    f"{proxy_url}/configure",
+                    data={
+                        'printer_ip': ip_address,
+                        'username': username,
+                        'password': password
+                    },
+                    timeout=30  # Increased timeout for proxy
+                )
+                return jsonify(proxy_response.json())
+            except requests.RequestException as e:
+                return jsonify({
+                    'success': False,
+                    'error': f'Proxy error: {str(e)}',
+                    'steps': [{'step': 'Proxy Connection', 'status': 'error', 'error': str(e)}]
+                })
+
+        # Direct configuration without proxy
         try:
-            # Login
+            # Test connection first
             printer.login()
-            steps.append({'step': 'Login', 'status': 'success'})
             
-            # Media setup
-            printer.update_media_setup()
-            steps.append({'step': 'Media Setup', 'status': 'success'})
+            # Configure printer
+            steps = [
+                (printer.login, "Login"),
+                (printer.update_media_setup, "Media Setup"),
+                (printer.update_general_setup, "General Setup"),
+                (printer.save_settings, "Save Settings")
+            ]
             
-            # General setup
-            printer.update_general_setup()
-            steps.append({'step': 'General Setup', 'status': 'success'})
-            
-            # Save settings
-            printer.save_settings()
-            steps.append({'step': 'Save Settings', 'status': 'success'})
+            results = []
+            for operation, description in steps:
+                try:
+                    response = operation()
+                    results.append({
+                        'step': description,
+                        'status': 'success',
+                        'response': response.text if hasattr(response, 'text') else str(response)
+                    })
+                    time.sleep(2)  # Add delay between steps
+                except Exception as step_error:
+                    results.append({
+                        'step': description,
+                        'status': 'error',
+                        'error': str(step_error)
+                    })
+                    raise Exception(f"Failed at {description}: {str(step_error)}")
             
             return jsonify({
                 'success': True,
-                'steps': steps
+                'steps': results
             })
             
-        except Exception as step_error:
-            # Add the failed step and return partial results
-            steps.append({
-                'step': steps[-1]['step'] if steps else 'Unknown',
-                'status': 'error',
-                'error': str(step_error)
-            })
-            
+        except Exception as e:
             return jsonify({
                 'success': False,
-                'steps': steps,
-                'error': str(step_error)
+                'error': str(e),
+                'steps': results if 'results' in locals() else []
             })
-            
+
     except Exception as e:
         return jsonify({
             'success': False,
-            'error': str(e),
-            'steps': [{'step': 'Initialization', 'status': 'error', 'error': str(e)}]
+            'error': f'Configuration failed: {str(e)}',
+            'steps': []
         })
 
 @app.route('/test_connection', methods=['POST'])

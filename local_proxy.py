@@ -3,6 +3,7 @@ import urllib.request
 import json
 import socket
 import urllib.parse
+import time
 
 class ProxyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -66,40 +67,47 @@ class ProxyHandler(BaseHTTPRequestHandler):
             username = form_data.get('username', ['admin'])[0]
             password = form_data.get('password', ['1234'])[0]
 
-            # First check what login fields are available
-            try:
-                print("Checking available login fields...")
-                check_request = urllib.request.Request(
-                    f'http://{printer_ip}/settings',
-                    headers={'Content-Type': 'application/x-www-form-urlencoded'}
-                )
-                check_response = urllib.request.urlopen(check_request, timeout=10)
-                check_data = check_response.read().decode()
-                
-                # Check for username/password fields
-                has_username = 'username' in check_data.lower()
-                has_password = 'password' in check_data.lower()
-                
-                # Prepare credentials based on available fields
-                creds = {}
-                if has_username:
-                    creds['0'] = username
-                if has_password:
-                    creds['1'] = password
+            print(f"Attempting to configure printer at {printer_ip}")
+            
+            # Try different login combinations
+            print("Trying different login combinations...")
+            combinations = [
+                ({'1': password}, "password only"),
+                ({'0': username}, "username only"),
+                ({'0': username, '1': password}, "both username and password")
+            ]
+            
+            login_data = None
+            for creds, desc in combinations:
+                try:
+                    print(f"\nTrying {desc}")
+                    check_url = f'http://{printer_ip}/settings'
+                    check_data = urllib.parse.urlencode(creds).encode()
                     
-                # If no fields detected, use both
-                if not creds:
-                    creds = {'0': username, '1': password}
+                    check_request = urllib.request.Request(
+                        check_url,
+                        data=check_data,
+                        headers={'Content-Type': 'application/x-www-form-urlencoded'}
+                    )
                     
-                print(f"Login fields detected - Username: {has_username}, Password: {has_password}")
-                login_data = urllib.parse.urlencode(creds).encode()
-                
-            except Exception as e:
-                print(f"Error checking login fields: {str(e)}")
-                print("Falling back to default credentials...")
+                    check_response = urllib.request.urlopen(check_request, timeout=10)
+                    response_data = check_response.read().decode()
+                    
+                    if "Incorrect" not in response_data:
+                        print(f"Success with {desc}")
+                        login_data = check_data
+                        break
+                        
+                except Exception as e:
+                    print(f"Failed with {desc}: {str(e)}")
+                    continue
+            
+            # If no combination worked, use both as fallback
+            if not login_data:
+                print("No login combination worked, using both as fallback")
                 login_data = urllib.parse.urlencode({'0': username, '1': password}).encode()
 
-            # Define configuration steps with dynamic login data
+            # Define configuration steps with debug logging
             config_steps = [
                 {
                     'name': 'Login',
@@ -130,20 +138,21 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             for step in config_steps:
                 try:
-                    print(f"Trying {step['name']}: {step['url']}")
+                    print(f"\nExecuting {step['name']}")
+                    print(f"URL: {step['url']}")
+                    print(f"Data: {step['data'].decode()}")
+                    
                     request = urllib.request.Request(
                         step['url'],
                         data=step['data'],
                         headers={'Content-Type': 'application/x-www-form-urlencoded'}
                     )
+                    
                     response = session.open(request, timeout=10)
                     response_data = response.read().decode()
+                    print(f"Response Code: {response.code}")
                     print(f"Response: {response_data}")
 
-                    # Check for specific error messages in response
-                    if "Incorrect" in response_data:
-                        raise Exception("Invalid credentials")
-                    
                     success = response.code == 200 and "Error" not in response_data
                     steps_results.append({
                         'step': step['name'],
@@ -152,10 +161,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     })
 
                     if not success:
-                        raise Exception(f"Step failed: {response_data}")
+                        print(f"Step failed with response: {response_data}")
+                        break
+
+                    # Add delay between steps
+                    time.sleep(2)
 
                 except Exception as e:
-                    print(f"Error in {step['name']}: {str(e)}")
+                    error_msg = f"Error in {step['name']}: {str(e)}"
+                    print(error_msg)
                     steps_results.append({
                         'step': step['name'],
                         'status': 'error',
