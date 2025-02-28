@@ -83,11 +83,29 @@ HTML_TEMPLATE = """
             border-radius: 4px;
             display: none;
         }
+        .environment-badge {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .environment-badge.render {
+            background-color: #e3f2fd;
+            color: #1976d2;
+            border: 1px solid #bbdefb;
+        }
+        .environment-badge.local {
+            background-color: #e8f5e9;
+            color: #388e3c;
+            border: 1px solid #c8e6c9;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Zebra Printer Configuration</h1>
+        <div id="environmentBadge"></div>
         <div class="form-group">
             <label for="printer_ip">Printer IP Address:</label>
             <input type="text" id="printer_ip" name="printer_ip" placeholder="Enter printer IP address">
@@ -112,6 +130,18 @@ HTML_TEMPLATE = """
     </div>
     
     <script>
+        // Detect environment
+        fetch('/api/status')
+            .then(response => response.json())
+            .then(data => {
+                const badge = document.getElementById('environmentBadge');
+                const isRender = window.location.hostname.includes('onrender.com');
+                badge.className = `environment-badge ${isRender ? 'render' : 'local'}`;
+                badge.innerHTML = isRender ? 
+                    '🌐 Running on Render (Limited Configuration)' : 
+                    '💻 Running Locally (Full Configuration)';
+            });
+
         function toggleAdvanced() {
             const advancedSettings = document.getElementById('advancedSettings');
             advancedSettings.style.display = advancedSettings.style.display === 'none' ? 'block' : 'none';
@@ -274,6 +304,15 @@ class ZebraPrinter:
         """Make HTTP request with error handling."""
         try:
             url = urljoin(self.base_url, endpoint)
+            # First check if we can reach the printer
+            try:
+                # Use a quick HEAD request first to check connectivity
+                requests.head(url, timeout=5)
+            except requests.RequestException:
+                app.logger.error(f"Cannot reach printer at {url}")
+                return None
+
+            # If we can reach it, proceed with the actual request
             response = self.session.request(
                 method=method,
                 url=url,
@@ -296,52 +335,58 @@ class ZebraPrinter:
         }
 
         try:
-            # Step 1: Login
-            if not self.login():
-                results['error'] = "Failed to authenticate with printer"
-                return results
-            results['steps'].append({'step': 'Login', 'status': 'success'})
+            # Check if we're running on render
+            if os.environ.get('RENDER'):
+                # For render, we'll use a simplified configuration approach
+                # First verify we can reach the printer
+                try:
+                    response = requests.get(f"{self.base_url}/", timeout=5)
+                    if response.status_code != 200:
+                        results['error'] = f"Printer returned status {response.status_code}"
+                        return results
+                except requests.RequestException as e:
+                    results['error'] = f"Cannot connect to printer: {str(e)}"
+                    return results
 
-            # Step 2: Media Setup
-            if not self.update_media_setup():
-                results['error'] = "Failed to update media setup"
-                return results
-            results['steps'].append({'step': 'Media Setup', 'status': 'success'})
-            time.sleep(2)
+                # Simplified configuration steps for render
+                steps = [
+                    (self.login, "Login"),
+                    (self.update_media_setup, "Media Setup"),
+                    (self.update_general_setup, "General Setup"),
+                    (self.save_settings, "Save Settings")
+                ]
 
-            # Step 3: General Setup
-            if not self.update_general_setup():
-                results['error'] = "Failed to update general setup"
-                return results
-            results['steps'].append({'step': 'General Setup', 'status': 'success'})
-            time.sleep(2)
+                for operation, description in steps:
+                    try:
+                        if operation():
+                            results['steps'].append({'step': description, 'status': 'success'})
+                            time.sleep(1)  # Reduced delay for render
+                        else:
+                            results['error'] = f"Failed at step: {description}"
+                            return results
+                    except Exception as e:
+                        results['error'] = f"Error during {description}: {str(e)}"
+                        return results
 
-            # Step 4: Feed Request
-            if not self.request_feed():
-                results['error'] = "Failed to execute feed request"
-                return results
-            results['steps'].append({'step': 'Feed Request', 'status': 'success'})
-            time.sleep(2)
+            else:
+                # For local environment, use the full configuration sequence
+                steps = [
+                    (self.login, "Login"),
+                    (self.update_media_setup, "Media Setup"),
+                    (self.update_general_setup, "General Setup"),
+                    (self.request_feed, "Feed Request"),
+                    (lambda: self.update_general_setup(True), "Cutter Mode Setup"),
+                    (self.print_test, "Test Print"),
+                    (self.save_settings, "Save Settings")
+                ]
 
-            # Step 5: Cutter Mode Setup
-            if not self.update_general_setup(True):
-                results['error'] = "Failed to update cutter mode"
-                return results
-            results['steps'].append({'step': 'Cutter Mode Setup', 'status': 'success'})
-            time.sleep(2)
-
-            # Step 6: Test Print
-            if not self.print_test():
-                results['error'] = "Failed to execute test print"
-                return results
-            results['steps'].append({'step': 'Test Print', 'status': 'success'})
-            time.sleep(2)
-
-            # Step 7: Save Settings
-            if not self.save_settings():
-                results['error'] = "Failed to save settings"
-                return results
-            results['steps'].append({'step': 'Save Settings', 'status': 'success'})
+                for operation, description in steps:
+                    if operation():
+                        results['steps'].append({'step': description, 'status': 'success'})
+                        time.sleep(2)
+                    else:
+                        results['error'] = f"Failed at step: {description}"
+                        return results
 
             results['success'] = True
             return results
@@ -389,7 +434,12 @@ def home():
 
 @app.route('/api/status')
 def api_status():
-    return jsonify({"status": "success", "message": "Zebra Printer Configuration API"})
+    """Return API status and environment information."""
+    return jsonify({
+        "status": "success",
+        "message": "Zebra Printer Configuration API",
+        "environment": "render" if os.environ.get('RENDER') else "local"
+    })
 
 @app.route('/configure', methods=['POST'])
 def configure_printer():
