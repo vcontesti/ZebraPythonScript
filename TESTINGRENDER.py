@@ -108,6 +108,8 @@ HTML_TEMPLATE = """
                     let html = '<h3>Connection Test Results:</h3>';
                     html += `<p>Ping Test: ${data.ping ? '✅' : '❌'}</p>`;
                     html += `<p>Printer Port (9100): ${data.port_9100 ? '✅' : '❌'}</p>`;
+                    html += `<p>Printer Port (6101): ${data.port_6101 ? '✅' : '❌'}</p>`;
+                    html += `<p>Printer Port (9001): ${data.port_9001 ? '✅' : '❌'}</p>`;
                     html += `<p>HTTP Connection: ${data.http ? '✅' : '❌'}</p>`;
                     html += '<h4>Details:</h4><ul>';
                     data.details.forEach(detail => {
@@ -115,7 +117,7 @@ HTML_TEMPLATE = """
                     });
                     html += '</ul>';
                     
-                    resultDiv.className = data.ping || data.port_9100 ? 'success' : 'error';
+                    resultDiv.className = data.ping || data.port_9100 || data.port_6101 || data.port_9001 ? 'success' : 'error';
                     resultDiv.innerHTML = html;
                 }
             })
@@ -198,42 +200,62 @@ def configure_printer(printer_ip):
     except requests.RequestException as e:
         return {"status": "error", "message": f"Failed to configure printer: {str(e)}"}
 
+def test_printer_port(ip, port, timeout=5, retries=3):
+    """Test a specific printer port with retries"""
+    for attempt in range(retries):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            result = sock.connect_ex((ip, port))
+            sock.close()
+            if result == 0:
+                return True, f"Port {port} is open"
+            elif result == 11:  # EAGAIN/EWOULDBLOCK
+                time.sleep(1)  # Wait before retry
+                continue
+            else:
+                return False, f"Port {port} is closed (error code: {result})"
+        except socket.timeout:
+            return False, f"Port {port} connection timed out"
+        except Exception as e:
+            return False, f"Port {port} test error: {str(e)}"
+    return False, f"Port {port} failed after {retries} attempts (last error: EAGAIN)"
+
 def test_printer_connection(printer_ip):
     """Test printer connectivity and return detailed status"""
     results = {
         'ip': printer_ip,
         'ping': False,
         'port_9100': False,
+        'port_6101': False,  # Additional Zebra port
+        'port_9001': False,  # Alternative raw port
         'http': False,
         'details': []
     }
     
     # Test basic ping with increased count
     try:
-        # Use 3 pings to be more certain
         response = os.system(f"ping -n 3 -w 1000 {printer_ip}")
         results['ping'] = response == 0
         results['details'].append('Ping successful' if response == 0 else 'Ping failed')
     except Exception as e:
         results['details'].append(f'Ping error: {str(e)}')
 
-    # Test port 9100 (raw printing port) with increased timeout
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)  # Increased timeout to 5 seconds
-        result = sock.connect_ex((printer_ip, 9100))
-        sock.close()
-        results['port_9100'] = result == 0
-        results['details'].append(f'Port 9100: {"open" if result == 0 else "closed"} (error code: {result})')
-    except socket.timeout:
-        results['details'].append('Port 9100 test timed out after 5 seconds')
-        results['port_9100'] = False
-    except Exception as e:
-        results['details'].append(f'Port 9100 test error: {str(e)}')
+    # Test common printer ports
+    printer_ports = [
+        (9100, 'port_9100', 'Standard raw printing'),
+        (6101, 'port_6101', 'Zebra status port'),
+        (9001, 'port_9001', 'Alternative raw port')
+    ]
+
+    for port, result_key, description in printer_ports:
+        success, message = test_printer_port(printer_ip, port)
+        results[result_key] = success
+        results['details'].append(f'{description} - {message}')
 
     # Test HTTP connection with increased timeout
     try:
-        response = requests.get(f'http://{printer_ip}', timeout=5)  # Increased timeout to 5 seconds
+        response = requests.get(f'http://{printer_ip}', timeout=5)
         results['http'] = response.status_code == 200
         results['details'].append(f'HTTP connection successful (status {response.status_code})')
     except requests.Timeout:
@@ -242,6 +264,13 @@ def test_printer_connection(printer_ip):
         results['details'].append('HTTP connection refused - web interface may be disabled')
     except requests.RequestException as e:
         results['details'].append(f'HTTP connection failed: {str(e)}')
+
+    # Add network route information for debugging
+    try:
+        route_info = os.popen(f'tracert -d -h 3 {printer_ip}').read()
+        results['details'].append(f'Network route information:\n{route_info}')
+    except Exception as e:
+        results['details'].append(f'Could not get route information: {str(e)}')
 
     return results
 
