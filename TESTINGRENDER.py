@@ -119,6 +119,7 @@ HTML_TEMPLATE = """
         </div>
         <div class="form-group">
             <a href="#" onclick="toggleAdvanced()">Advanced Settings</a>
+            <span style="margin: 0 10px;">|</span>
             <a href="#" onclick="toggleProxy()">Proxy Settings</a>
         </div>
         <div id="advancedSettings" class="advanced-settings">
@@ -134,8 +135,7 @@ HTML_TEMPLATE = """
         <div id="proxySettings" class="proxy-settings">
             <div class="form-group">
                 <label for="proxy_url">Proxy URL:</label>
-                <input type="text" id="proxy_url" name="proxy_url" placeholder="Enter ngrok proxy URL">
-                <small>Required when accessing from render.com</small>
+                <input type="text" id="proxy_url" name="proxy_url" placeholder="Enter proxy URL (e.g., http://localhost:5001)">
             </div>
         </div>
         <button onclick="testConnection()">Test Connection</button>
