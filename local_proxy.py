@@ -2,6 +2,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.request
 import json
 import socket
+import urllib.parse
 
 class ProxyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -49,31 +50,81 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_error(500, str(e))
 
     def do_POST(self):
-        # Get printer IP and data from request
-        content_length = int(self.headers.get('Content-Length', 0))
-        post_data = self.rfile.read(content_length).decode()
-        
         try:
-            # Forward request to printer
+            # Get printer IP from header
             printer_ip = self.headers.get('X-Printer-IP')
             if not printer_ip:
                 self.send_error(400, "Printer IP not specified")
                 return
-                
-            request = urllib.request.Request(
-                f'http://{printer_ip}{self.path}',
-                data=post_data.encode(),
-                headers={'Content-Type': 'application/x-www-form-urlencoded'}
-            )
+
+            # Read POST data
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length).decode()
             
-            response = urllib.request.urlopen(request)
-            
+            # Parse the form data
+            form_data = urllib.parse.parse_qs(post_data)
+            username = form_data.get('username', ['admin'])[0]
+            password = form_data.get('password', ['1234'])[0]
+
+            # Define configuration steps
+            config_steps = [
+                {
+                    'name': 'Login',
+                    'url': f'http://{printer_ip}/weblink/login',
+                    'data': urllib.parse.urlencode({'0': username, '1': password}).encode()
+                },
+                {
+                    'name': 'Media Setup',
+                    'url': f'http://{printer_ip}/weblink/media_setup',
+                    'data': urllib.parse.urlencode({'1': '0', '16': '0', '15': '0'}).encode()
+                },
+                {
+                    'name': 'General Setup',
+                    'url': f'http://{printer_ip}/weblink/general_setup',
+                    'data': urllib.parse.urlencode({'1': '0', '12': '0'}).encode()
+                },
+                {
+                    'name': 'Save Settings',
+                    'url': f'http://{printer_ip}/weblink/save_settings',
+                    'data': urllib.parse.urlencode({'1': '1'}).encode()
+                }
+            ]
+
+            # Execute configuration steps
+            steps_results = []
+            for step in config_steps:
+                try:
+                    request = urllib.request.Request(
+                        step['url'],
+                        data=step['data'],
+                        headers={'Content-Type': 'application/x-www-form-urlencoded'}
+                    )
+                    response = urllib.request.urlopen(request, timeout=5)
+                    success = response.getcode() == 200
+                    steps_results.append({
+                        'step': step['name'],
+                        'status': 'success' if success else 'error'
+                    })
+                except Exception as e:
+                    steps_results.append({
+                        'step': step['name'],
+                        'status': 'error',
+                        'error': str(e)
+                    })
+                    break
+
             # Send response back
-            self.send_response(response.getcode())
-            self.send_header('Content-Type', response.headers.get('Content-Type', 'text/plain'))
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(response.read())
+            
+            result = {
+                'success': all(step['status'] == 'success' for step in steps_results),
+                'steps': steps_results
+            }
+            
+            self.wfile.write(json.dumps(result).encode())
             
         except Exception as e:
             self.send_error(500, str(e))

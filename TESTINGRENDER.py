@@ -264,7 +264,10 @@ HTML_TEMPLATE = """
             resultDiv.innerHTML = 'Configuring printer...';
             resultDiv.className = '';
 
-            const configUrl = proxyUrl ? `${proxyUrl}/configure` : '/configure';
+            const configUrl = proxyUrl ? 
+                `${proxyUrl}/configure` : 
+                '/configure';
+            
             const headers = {
                 'Content-Type': 'application/x-www-form-urlencoded'
             };
@@ -281,7 +284,7 @@ HTML_TEMPLATE = """
             fetch(configUrl, {
                 method: 'POST',
                 headers: headers,
-                body: formData
+                body: formData.toString()  
             })
             .then(response => {
                 if (!response.ok) {
@@ -290,14 +293,17 @@ HTML_TEMPLATE = """
                 return response.json();
             })
             .then(data => {
-                if (data.error) {
+                if (!data.success) {
                     resultDiv.className = 'error';
-                    resultDiv.innerHTML = `<h3>Configuration Failed</h3><p>Error: ${data.error}</p>`;
+                    resultDiv.innerHTML = '<h3>Configuration Failed</h3>';
                     
                     if (data.steps && data.steps.length > 0) {
-                        resultDiv.innerHTML += '<h4>Steps Completed:</h4>';
+                        resultDiv.innerHTML += '<h4>Steps:</h4>';
                         data.steps.forEach(step => {
-                            resultDiv.innerHTML += `<div class="step ${step.status}">${step.step}: ${step.status}</div>`;
+                            resultDiv.innerHTML += `<div class="step ${step.status}">
+                                ${step.step}: ${step.status}
+                                ${step.error ? '<br>' + step.error : ''}
+                            </div>`;
                         });
                     }
                 } else {
@@ -496,7 +502,7 @@ def configure_printer():
     printer_ip = request.form.get('printer_ip', '').strip()
     username = request.form.get('username', 'admin').strip()
     password = request.form.get('password', '1234').strip()
-    proxy_url = request.form.get('proxy_url', '').strip()  # New proxy URL parameter
+    proxy_url = request.form.get('proxy_url', '').strip()  
 
     try:
         # Initialize and configure printer
