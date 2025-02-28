@@ -4,6 +4,10 @@ import time
 import os
 import ipaddress
 import socket
+import re
+from dataclasses import dataclass
+from typing import Dict, Optional
+from urllib.parse import urljoin
 
 app = Flask(__name__)
 
@@ -14,37 +18,29 @@ HTML_TEMPLATE = """
 <head>
     <title>Zebra Printer Configuration</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
+        .container {
             max-width: 800px;
             margin: 0 auto;
             padding: 20px;
-            background-color: #f5f5f5;
-        }
-        .container {
-            background-color: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #333;
+            font-family: Arial, sans-serif;
         }
         .form-group {
             margin-bottom: 15px;
         }
-        input[type="text"] {
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        .form-group input {
             width: 100%;
             padding: 8px;
-            margin: 8px 0;
             border: 1px solid #ddd;
             border-radius: 4px;
-            box-sizing: border-box;
         }
         button {
             background-color: #4CAF50;
             color: white;
-            padding: 10px 15px;
+            padding: 10px 20px;
             border: none;
             border-radius: 4px;
             cursor: pointer;
@@ -53,9 +49,9 @@ HTML_TEMPLATE = """
         button:hover {
             background-color: #45a049;
         }
-        #testResult {
-            margin-top: 15px;
-            padding: 10px;
+        #testResult, #configResult {
+            margin-top: 20px;
+            padding: 15px;
             border-radius: 4px;
             display: none;
         }
@@ -69,6 +65,24 @@ HTML_TEMPLATE = """
             border: 1px solid #ebccd1;
             color: #a94442;
         }
+        .step {
+            margin: 5px 0;
+            padding: 5px;
+            border-radius: 4px;
+        }
+        .step.success {
+            background-color: #dff0d8;
+        }
+        .step.error {
+            background-color: #f2dede;
+        }
+        .advanced-settings {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -78,12 +92,31 @@ HTML_TEMPLATE = """
             <label for="printer_ip">Printer IP Address:</label>
             <input type="text" id="printer_ip" name="printer_ip" placeholder="Enter printer IP address">
         </div>
+        <div class="form-group">
+            <a href="#" onclick="toggleAdvanced()">Advanced Settings</a>
+        </div>
+        <div id="advancedSettings" class="advanced-settings">
+            <div class="form-group">
+                <label for="username">Username:</label>
+                <input type="text" id="username" name="username" value="admin">
+            </div>
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" value="1234">
+            </div>
+        </div>
         <button onclick="testConnection()">Test Connection</button>
         <button onclick="configurePrinter()">Configure Printer</button>
         <div id="testResult"></div>
+        <div id="configResult"></div>
     </div>
     
     <script>
+        function toggleAdvanced() {
+            const advancedSettings = document.getElementById('advancedSettings');
+            advancedSettings.style.display = advancedSettings.style.display === 'none' ? 'block' : 'none';
+        }
+
         function testConnection() {
             const printerIp = document.getElementById('printer_ip').value;
             const resultDiv = document.getElementById('testResult');
@@ -140,7 +173,9 @@ HTML_TEMPLATE = """
         
         function configurePrinter() {
             const printerIp = document.getElementById('printer_ip').value;
-            const resultDiv = document.getElementById('testResult');
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const resultDiv = document.getElementById('configResult');
             
             if (!printerIp) {
                 resultDiv.className = 'error';
@@ -154,6 +189,8 @@ HTML_TEMPLATE = """
             
             const formData = new FormData();
             formData.append('printer_ip', printerIp);
+            formData.append('username', username);
+            formData.append('password', password);
             
             fetch('/configure', {
                 method: 'POST',
@@ -163,10 +200,21 @@ HTML_TEMPLATE = """
             .then(data => {
                 if (data.error) {
                     resultDiv.className = 'error';
-                    resultDiv.innerHTML = `Error: ${data.error}`;
+                    resultDiv.innerHTML = `<h3>Configuration Failed</h3><p>Error: ${data.error}</p>`;
+                    
+                    if (data.steps && data.steps.length > 0) {
+                        resultDiv.innerHTML += '<h4>Steps Completed:</h4>';
+                        data.steps.forEach(step => {
+                            resultDiv.innerHTML += `<div class="step ${step.status}">${step.step}: ${step.status}</div>`;
+                        });
+                    }
                 } else {
                     resultDiv.className = 'success';
-                    resultDiv.innerHTML = 'Printer configured successfully!';
+                    resultDiv.innerHTML = '<h3>Printer Configuration Successful!</h3>';
+                    resultDiv.innerHTML += '<h4>Completed Steps:</h4>';
+                    data.steps.forEach(step => {
+                        resultDiv.innerHTML += `<div class="step success">${step.step}: ${step.status}</div>`;
+                    });
                 }
             })
             .catch(error => {
@@ -179,43 +227,247 @@ HTML_TEMPLATE = """
 </html>
 """
 
-def configure_printer(printer_ip):
-    """Configure the printer with increased timeout and detailed error handling"""
-    try:
-        # First verify we can reach the printer
-        connection_test = test_printer_connection(printer_ip)
-        if not connection_test['ping']:
-            return {"status": "error", "message": "Cannot ping printer"}
-            
-        # Increase timeout for printer communication
-        timeout = 10
-        url = f'http://{printer_ip}/config.html'
-        
-        # Detailed logging of connection attempt
-        print(f"Attempting to connect to {url} with timeout {timeout}s")
-        
-        response = requests.get(url, timeout=timeout)
-        if response.status_code != 200:
-            return {"status": "error", "message": f"Printer returned status code: {response.status_code}"}
-            
-        # Configuration commands with increased timeout
-        config_url = f'http://{printer_ip}/config.html'
-        config_data = {
-            'config': 'your_config_here'  # Add your specific configuration
+@dataclass
+class PrinterConfig:
+    """Configuration settings for the Zebra printer."""
+    media_setup: Dict[str, str] = None
+    general_setup: Dict[str, str] = None
+    settings_setup: Dict[str, str] = None
+    feed_request: Dict[str, str] = None
+    test_print: Dict[str, str] = None
+
+    def __post_init__(self):
+        # Default configuration values
+        self.media_setup = {
+            "0": "1", "1": "1", "2": "1", "3": "0",
+            "4": "832", "5": "3048", "submit": "Submit Changes"
         }
+        self.general_setup = {
+            "2": "0", "4": "26.0", "6": "4", "5": "0",
+            "7": "2", "8": "0", "submit": "Submit Changes"
+        }
+        self.settings_setup = {"0": "Save Current Configuration"}
+        self.feed_request = {"1": "submit"}
+        self.test_print = {"4": "submit"}
+
+class ZebraPrinter:
+    """Class to manage Zebra printer operations."""
+    
+    def __init__(self, ip_address: str, username: str = "admin", password: str = "1234"):
+        """Initialize printer with connection details."""
+        self.validate_ip_address(ip_address)
+        self.base_url = f"http://{ip_address}"
+        self.session = requests.Session()
+        self.config = PrinterConfig()
+        self._credentials = {"0": username, "1": password}
+        self.headers = {"Content-Type": "application/x-www-form-urlencoded"}
         
-        config_response = requests.post(config_url, data=config_data, timeout=timeout)
-        if config_response.status_code != 200:
-            return {"status": "error", "message": f"Configuration failed with status code: {config_response.status_code}"}
+    @staticmethod
+    def validate_ip_address(ip: str) -> bool:
+        """Validate IP address format."""
+        pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+        if not re.match(pattern, ip):
+            raise ValueError("Invalid IP address format")
+        return True
+
+    def _make_request(self, endpoint: str, data: Dict, method: str = 'POST') -> Optional[requests.Response]:
+        """Make HTTP request with error handling."""
+        try:
+            url = urljoin(self.base_url, endpoint)
+            response = self.session.request(
+                method=method,
+                url=url,
+                data=data,
+                headers=self.headers,
+                timeout=10
+            )
+            response.raise_for_status()
+            return response
+        except requests.RequestException as e:
+            app.logger.error(f"Request failed: {str(e)}")
+            return None
+
+    def configure_printer(self) -> Dict[str, any]:
+        """Configure the printer with all settings."""
+        results = {
+            'success': False,
+            'steps': [],
+            'error': None
+        }
+
+        try:
+            # Step 1: Login
+            if not self.login():
+                results['error'] = "Failed to authenticate with printer"
+                return results
+            results['steps'].append({'step': 'Login', 'status': 'success'})
+
+            # Step 2: Media Setup
+            if not self.update_media_setup():
+                results['error'] = "Failed to update media setup"
+                return results
+            results['steps'].append({'step': 'Media Setup', 'status': 'success'})
+            time.sleep(2)
+
+            # Step 3: General Setup
+            if not self.update_general_setup():
+                results['error'] = "Failed to update general setup"
+                return results
+            results['steps'].append({'step': 'General Setup', 'status': 'success'})
+            time.sleep(2)
+
+            # Step 4: Feed Request
+            if not self.request_feed():
+                results['error'] = "Failed to execute feed request"
+                return results
+            results['steps'].append({'step': 'Feed Request', 'status': 'success'})
+            time.sleep(2)
+
+            # Step 5: Cutter Mode Setup
+            if not self.update_general_setup(True):
+                results['error'] = "Failed to update cutter mode"
+                return results
+            results['steps'].append({'step': 'Cutter Mode Setup', 'status': 'success'})
+            time.sleep(2)
+
+            # Step 6: Test Print
+            if not self.print_test():
+                results['error'] = "Failed to execute test print"
+                return results
+            results['steps'].append({'step': 'Test Print', 'status': 'success'})
+            time.sleep(2)
+
+            # Step 7: Save Settings
+            if not self.save_settings():
+                results['error'] = "Failed to save settings"
+                return results
+            results['steps'].append({'step': 'Save Settings', 'status': 'success'})
+
+            results['success'] = True
+            return results
+
+        except Exception as e:
+            results['error'] = str(e)
+            return results
+
+    def login(self) -> bool:
+        """Authenticate with the printer."""
+        response = self._make_request('/settings', self._credentials)
+        return bool(response)
+
+    def update_media_setup(self) -> bool:
+        """Update media configuration."""
+        response = self._make_request('/setmed', self.config.media_setup)
+        return bool(response)
+
+    def update_general_setup(self, cutter_mode: bool = False) -> bool:
+        """Update general configuration."""
+        data = self.config.general_setup.copy()
+        if cutter_mode:
+            data["6"] = "1"
+        response = self._make_request('/setgen', data)
+        return bool(response)
+
+    def save_settings(self) -> bool:
+        """Save current configuration."""
+        response = self._make_request('/settings', self.config.settings_setup)
+        return bool(response)
+
+    def request_feed(self) -> bool:
+        """Request paper feed."""
+        response = self._make_request('/control', self.config.feed_request)
+        return bool(response)
+
+    def print_test(self) -> bool:
+        """Perform test print."""
+        response = self._make_request('/setlst', self.config.test_print)
+        return bool(response)
+
+@app.route('/')
+def home():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/api/status')
+def api_status():
+    return jsonify({"status": "success", "message": "Zebra Printer Configuration API"})
+
+@app.route('/configure', methods=['POST'])
+def configure_printer():
+    """Configure the Zebra printer with all settings."""
+    printer_ip = request.form.get('printer_ip', '').strip()
+    username = request.form.get('username', 'admin').strip()
+    password = request.form.get('password', '1234').strip()
+
+    try:
+        # Initialize and configure printer
+        printer = ZebraPrinter(printer_ip, username, password)
+        results = printer.configure_printer()
+        
+        if results['success']:
+            return jsonify({
+                'success': True,
+                'steps': results['steps']
+            })
+        else:
+            return jsonify({
+                'error': results['error'],
+                'steps': results['steps']
+            }), 400
+
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        app.logger.error(f"Configuration error: {str(e)}")
+        return jsonify({'error': f"An error occurred: {str(e)}"}), 500
+
+@app.route('/test_connection', methods=['POST'])
+def test_connection():
+    printer_ip = request.form.get('printer_ip', '').strip()
+    
+    try:
+        # First validate IP format
+        ipaddress.ip_address(printer_ip)
+        
+        # For render website, we'll use a simpler connection test that doesn't rely on local network commands
+        if os.environ.get('RENDER') or not os.name == 'nt':  # Check if we're on render or not on Windows
+            results = {
+                'ip': printer_ip,
+                'ping': False,
+                'port_9100': False,
+                'http': False,
+                'details': []
+            }
             
-        return {"status": "success", "message": "Printer configured successfully"}
-        
-    except requests.Timeout:
-        return {"status": "error", "message": "Connection timed out. Printer is reachable but not responding to configuration requests"}
-    except requests.ConnectionError as e:
-        return {"status": "error", "message": f"Connection error: {str(e)}. Printer is pingable but web interface may be disabled"}
-    except requests.RequestException as e:
-        return {"status": "error", "message": f"Failed to configure printer: {str(e)}"}
+            # Use socket for basic connection test
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(5)
+                result = sock.connect_ex((printer_ip, 9100))
+                sock.close()
+                
+                results['port_9100'] = result == 0
+                results['details'].append(f'Port 9100: {"open" if result == 0 else "closed"}')
+            except Exception as e:
+                results['details'].append(f'Port 9100 test error: {str(e)}')
+
+            # Try HTTP connection
+            try:
+                response = requests.get(f'http://{printer_ip}', timeout=5)
+                results['http'] = response.status_code == 200
+                results['details'].append(f'HTTP connection: Status {response.status_code}')
+            except Exception as e:
+                results['details'].append(f'HTTP connection failed: {str(e)}')
+                
+            return jsonify(results)
+        else:
+            # On localhost/Windows, use our full test suite
+            results = test_printer_connection(printer_ip)
+            return jsonify(results)
+            
+    except ValueError:
+        return jsonify({'error': 'Invalid IP address format'}), 400
+    except Exception as e:
+        return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
 def test_printer_port(ip, port, timeout=10):
     """Test a specific printer port using Test-NetConnection"""
@@ -276,92 +528,6 @@ def test_printer_connection(printer_ip):
         results['details'].append(f'HTTP connection failed: {str(e)}')
 
     return results
-
-@app.route('/')
-def home():
-    return render_template_string(HTML_TEMPLATE)
-
-@app.route('/api/status')
-def api_status():
-    return jsonify({"status": "success", "message": "Zebra Printer Configuration API"})
-
-@app.route('/configure', methods=['POST'])
-def configure():
-    printer_ip = request.form.get('printer_ip', '').strip()
-    
-    # Validate IP address
-    try:
-        # Check if it's a valid IP address format
-        ip_obj = ipaddress.ip_address(printer_ip)
-        
-        # Ensure it's IPv4
-        if not isinstance(ip_obj, ipaddress.IPv4Address):
-            return jsonify({'error': 'Please enter a valid IPv4 address'}), 400
-            
-        # Basic connectivity check with timeout
-        socket.create_connection((printer_ip, 9100), timeout=2)
-        
-        # If all checks pass, proceed with printer configuration
-        result = configure_printer(printer_ip)
-        return jsonify(result)
-        
-    except ValueError:
-        return jsonify({'error': 'Invalid IP address format'}), 400
-    except socket.timeout:
-        return jsonify({'error': 'Could not connect to printer (timeout)'}), 400
-    except socket.error:
-        return jsonify({'error': 'Could not connect to printer. Please check if the printer is online'}), 400
-    except Exception as e:
-        return jsonify({'error': f'An error occurred: {str(e)}'}), 500
-
-@app.route('/test_connection', methods=['POST'])
-def test_connection():
-    printer_ip = request.form.get('printer_ip', '').strip()
-    
-    try:
-        # First validate IP format
-        ipaddress.ip_address(printer_ip)
-        
-        # For render website, we'll use a simpler connection test that doesn't rely on local network commands
-        if os.environ.get('RENDER') or not os.name == 'nt':  # Check if we're on render or not on Windows
-            results = {
-                'ip': printer_ip,
-                'ping': False,
-                'port_9100': False,
-                'http': False,
-                'details': []
-            }
-            
-            # Use socket for basic connection test
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
-                result = sock.connect_ex((printer_ip, 9100))
-                sock.close()
-                
-                results['port_9100'] = result == 0
-                results['details'].append(f'Port 9100: {"open" if result == 0 else "closed"}')
-            except Exception as e:
-                results['details'].append(f'Port 9100 test error: {str(e)}')
-
-            # Try HTTP connection
-            try:
-                response = requests.get(f'http://{printer_ip}', timeout=5)
-                results['http'] = response.status_code == 200
-                results['details'].append(f'HTTP connection: Status {response.status_code}')
-            except Exception as e:
-                results['details'].append(f'HTTP connection failed: {str(e)}')
-                
-            return jsonify(results)
-        else:
-            # On localhost/Windows, use our full test suite
-            results = test_printer_connection(printer_ip)
-            return jsonify(results)
-            
-    except ValueError:
-        return jsonify({'error': 'Invalid IP address format'}), 400
-    except Exception as e:
-        return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
