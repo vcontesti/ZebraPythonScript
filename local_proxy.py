@@ -70,22 +70,22 @@ class ProxyHandler(BaseHTTPRequestHandler):
             config_steps = [
                 {
                     'name': 'Login',
-                    'url': f'http://{printer_ip}/weblink/login',
+                    'url': f'http://{printer_ip}/login',
                     'data': urllib.parse.urlencode({'0': username, '1': password}).encode()
                 },
                 {
                     'name': 'Media Setup',
-                    'url': f'http://{printer_ip}/weblink/media_setup',
+                    'url': f'http://{printer_ip}/media_setup',
                     'data': urllib.parse.urlencode({'1': '0', '16': '0', '15': '0'}).encode()
                 },
                 {
                     'name': 'General Setup',
-                    'url': f'http://{printer_ip}/weblink/general_setup',
+                    'url': f'http://{printer_ip}/general_setup',
                     'data': urllib.parse.urlencode({'1': '0', '12': '0'}).encode()
                 },
                 {
                     'name': 'Save Settings',
-                    'url': f'http://{printer_ip}/weblink/save_settings',
+                    'url': f'http://{printer_ip}/save_settings',
                     'data': urllib.parse.urlencode({'1': '1'}).encode()
                 }
             ]
@@ -94,18 +94,23 @@ class ProxyHandler(BaseHTTPRequestHandler):
             steps_results = []
             for step in config_steps:
                 try:
+                    print(f"Trying {step['name']}: {step['url']}")  
                     request = urllib.request.Request(
                         step['url'],
                         data=step['data'],
                         headers={'Content-Type': 'application/x-www-form-urlencoded'}
                     )
-                    response = urllib.request.urlopen(request, timeout=5)
+                    response = urllib.request.urlopen(request, timeout=10)  
+                    response_data = response.read().decode()
+                    print(f"Response: {response_data}")  
                     success = response.getcode() == 200
                     steps_results.append({
                         'step': step['name'],
-                        'status': 'success' if success else 'error'
+                        'status': 'success' if success else 'error',
+                        'response': response_data
                     })
                 except Exception as e:
+                    print(f"Error in {step['name']}: {str(e)}")  
                     steps_results.append({
                         'step': step['name'],
                         'status': 'error',

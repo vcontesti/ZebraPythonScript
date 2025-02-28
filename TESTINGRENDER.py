@@ -135,7 +135,7 @@ HTML_TEMPLATE = """
         <div id="proxySettings" class="proxy-settings">
             <div class="form-group">
                 <label for="proxy_url">Proxy URL:</label>
-                <input type="text" id="proxy_url" name="proxy_url" placeholder="Enter proxy URL (e.g., http://localhost:5001)">
+                <input type="text" id="proxy_url" name="proxy_url" value="http://localhost:5001">
             </div>
         </div>
         <button onclick="testConnection()">Test Connection</button>
@@ -498,33 +498,60 @@ def api_status():
 
 @app.route('/configure', methods=['POST'])
 def configure_printer():
-    """Configure the Zebra printer with all settings."""
     printer_ip = request.form.get('printer_ip', '').strip()
     username = request.form.get('username', 'admin').strip()
     password = request.form.get('password', '1234').strip()
-    proxy_url = request.form.get('proxy_url', '').strip()  
+    proxy_url = request.form.get('proxy_url', '').strip()
 
     try:
-        # Initialize and configure printer
+        # Initialize printer configuration
         printer = ZebraPrinter(printer_ip, username, password, proxy_url)
-        results = printer.configure_printer()
         
-        if results['success']:
+        # Perform configuration steps
+        steps = []
+        
+        try:
+            # Login
+            printer.login()
+            steps.append({'step': 'Login', 'status': 'success'})
+            
+            # Media setup
+            printer.update_media_setup()
+            steps.append({'step': 'Media Setup', 'status': 'success'})
+            
+            # General setup
+            printer.update_general_setup()
+            steps.append({'step': 'General Setup', 'status': 'success'})
+            
+            # Save settings
+            printer.save_settings()
+            steps.append({'step': 'Save Settings', 'status': 'success'})
+            
             return jsonify({
                 'success': True,
-                'steps': results['steps']
+                'steps': steps
             })
-        else:
+            
+        except Exception as step_error:
+            # Add the failed step and return partial results
+            steps.append({
+                'step': steps[-1]['step'] if steps else 'Unknown',
+                'status': 'error',
+                'error': str(step_error)
+            })
+            
             return jsonify({
-                'error': results['error'],
-                'steps': results['steps']
-            }), 400
-
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+                'success': False,
+                'steps': steps,
+                'error': str(step_error)
+            })
+            
     except Exception as e:
-        app.logger.error(f"Configuration error: {str(e)}")
-        return jsonify({'error': f"An error occurred: {str(e)}"}), 500
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'steps': [{'step': 'Initialization', 'status': 'error', 'error': str(e)}]
+        })
 
 @app.route('/test_connection', methods=['POST'])
 def test_connection():
